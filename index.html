@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>events</title>
+<style>
+  body { font-family: sans-serif; background: #181818; color: #ddd; max-width: 520px; margin: 20px auto; padding: 0 16px; }
+  .ev { background: #262626; padding: 10px; margin: 8px 0; }
+  .buy { border-left: 4px solid #2e8b4f; }
+  .sell { border-left: 4px solid #a33; }
+  button, input { padding: 6px; margin: 2px 0; }
+</style>
+</head>
+<body>
+<h3>events</h3>
+<div id="list">loading...</div>
+<button id="reg">get token</button> <span id="tok"></span>
+<script>
+var token = ''
+function $(id) { return document.getElementById(id) }
+function h() { return token ? { Authorization: 'Bearer ' + token } : {} }
+
+function load() {
+  fetch('/events', { headers: h() }).then(r => r.json()).then(function (d) {
+    var off = d.serverTime - Date.now()
+    $('list').innerHTML = d.events.length ? '' : 'no events'
+    d.events.forEach(function (e) {
+      var div = document.createElement('div')
+      div.className = 'ev ' + e.action
+      var s = Math.round((e.timestamp - (Date.now() + off)) / 1000)
+      div.textContent = e.action + ' ' + e.stockId + ' in ' + s + 's (' + e.subscribers + ' joined) ' + (e.note || '')
+      var b = document.createElement('button')
+      b.textContent = e.subscribed ? 'leave' : 'join'
+      b.onclick = function () {
+        fetch('/events/' + e.id + '/subscribe', { method: e.subscribed ? 'DELETE' : 'POST', headers: h() }).then(load)
+      }
+      div.appendChild(document.createElement('br'))
+      div.appendChild(b)
+      $('list').appendChild(div)
+    })
+  })
+}
+
+$('reg').onclick = function () {
+  fetch('/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+    .then(r => r.json()).then(function (d) { token = d.token; $('tok').textContent = token; load() })
+}
+load()
+setInterval(load, 3000)
+</script>
+</body>
+</html>
