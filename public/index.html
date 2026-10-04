@@ -1,99 +1,102 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Screen Stocks Signals</title>
+<title>signals</title>
 <style>
-  body{font-family:system-ui,sans-serif;background:#12141a;color:#eee;max-width:520px;margin:0 auto;padding:24px}
-  h1{font-size:20px} input,button{font:inherit;padding:10px;border-radius:8px;border:1px solid #333;background:#1c1f28;color:#eee}
-  button{cursor:pointer} .row{display:flex;gap:8px;margin:8px 0}
-  #screen{margin:24px 0;padding:40px 16px;border-radius:16px;text-align:center;background:#1c1f28}
-  #screen.buy{background:#14532d} #screen.sell{background:#7f1d1d}
-  #big{font-size:56px;font-weight:700} #sub{opacity:.8}
-  details{margin-top:24px}
+  body { font-family: sans-serif; background: #181818; color: #ddd; max-width: 480px; margin: 20px auto; padding: 0 16px; }
+  input, button { padding: 8px; margin: 3px 0; }
+  #box { margin: 20px 0; padding: 40px 10px; text-align: center; background: #262626; }
+  #box.buy { background: #1d4d2b; }
+  #box.sell { background: #6b1f1f; }
+  #big { font-size: 48px; font-weight: bold; }
 </style>
 </head>
 <body>
-<h1>Screen Stocks Signals</h1>
-<div class="row">
-  <input id="code" placeholder="Join code (if needed)">
-  <button id="connect">Connect</button>
+
+<input id="code" placeholder="join code">
+<button id="go">connect</button>
+
+<div id="box">
+  <div id="big">-</div>
+  <div id="small">not connected</div>
 </div>
-<div id="screen"><div id="big">Waiting…</div><div id="sub">Not connected</div></div>
-<p style="opacity:.7;font-size:14px">You press the buttons in the game yourself when the countdown hits zero.</p>
 
 <details>
-  <summary>Host panel</summary>
-  <div class="row"><input id="key" type="password" placeholder="Admin key" style="flex:1"></div>
-  <div class="row"><input id="note" placeholder="Note (optional)" style="flex:1"><input id="delay" type="number" value="10" min="3" max="120" style="width:70px"></div>
-  <div class="row"><button id="buy" style="flex:1">Send BUY</button><button id="sell" style="flex:1">Send SELL</button></div>
-  <div id="hostmsg" style="font-size:14px;opacity:.8"></div>
+  <summary>host</summary>
+  <input id="key" type="password" placeholder="admin key"><br>
+  <input id="stock" placeholder="stock id"><br>
+  <input id="note" placeholder="note">
+  <input id="delay" type="number" value="10" style="width:60px"><br>
+  <button id="buy">send buy</button>
+  <button id="sell">send sell</button>
+  <div id="msg"></div>
 </details>
 
 <script>
-const $ = (id) => document.getElementById(id);
-let offset = 0, timer = null, es = null, audio = null;
+var offset = 0, timer, es, ctx
 
-function beep(freq = 880, ms = 150) {
-  audio = audio || new (window.AudioContext || window.webkitAudioContext)();
-  const o = audio.createOscillator(), g = audio.createGain();
-  o.frequency.value = freq; o.connect(g); g.connect(audio.destination);
-  g.gain.value = 0.2; o.start(); o.stop(audio.currentTime + ms / 1000);
+function $(id) { return document.getElementById(id) }
+
+function beep(f, ms) {
+  ctx = ctx || new (window.AudioContext || window.webkitAudioContext)()
+  var o = ctx.createOscillator()
+  o.frequency.value = f
+  o.connect(ctx.destination)
+  o.start()
+  o.stop(ctx.currentTime + ms / 1000)
 }
 
-function show(sig) {
-  clearInterval(timer);
-  $('screen').className = sig.action;
-  let lastShown = null;
-  timer = setInterval(() => {
-    const left = sig.fireAt - (Date.now() + offset);
+function run(sig) {
+  clearInterval(timer)
+  $('box').className = sig.action
+  var lastSec = -1
+
+  timer = setInterval(function () {
+    var left = sig.fireAt - (Date.now() + offset)
     if (left > 0) {
-      const s = Math.ceil(left / 1000);
-      $('big').textContent = s;
-      $('sub').textContent = sig.action.toUpperCase() + ' in ' + s + 's' + (sig.note ? ' – ' + sig.note : '');
-      if (s <= 3 && s !== lastShown) beep(660);
-      lastShown = s;
+      var s = Math.ceil(left / 1000)
+      $('big').textContent = s
+      $('small').textContent = sig.action + ' ' + (sig.note || '')
+      if (s <= 3 && s != lastSec) beep(600, 120)
+      lastSec = s
     } else {
-      $('big').textContent = sig.action.toUpperCase() + ' NOW';
-      $('sub').textContent = sig.note || '';
-      beep(1100, 400);
-      clearInterval(timer);
+      $('big').textContent = sig.action.toUpperCase() + ' NOW'
+      beep(1000, 400)
+      clearInterval(timer)
     }
-  }, 100);
-  if (window.Notification && Notification.permission === 'granted') {
-    new Notification('Signal: ' + sig.action.toUpperCase(), { body: sig.note || '' });
-  }
+  }, 100)
 }
 
-$('connect').onclick = () => {
-  if (es) es.close();
-  if (window.Notification && Notification.permission === 'default') Notification.requestPermission();
-  beep(440, 80); // unlocks audio
-  es = new EventSource('/events?code=' + encodeURIComponent($('code').value));
-  es.addEventListener('hello', (e) => {
-    offset = JSON.parse(e.data).serverTime - Date.now();
-    $('sub').textContent = 'Connected. Waiting for a signal…';
-  });
-  es.addEventListener('signal', (e) => {
-    const sig = JSON.parse(e.data);
-    offset = sig.serverTime - Date.now();
-    show(sig);
-  });
-  es.onerror = () => { $('sub').textContent = 'Connection lost or invalid code. Retrying…'; };
-};
+$('go').onclick = function () {
+  if (es) es.close()
+  beep(300, 50)
+  es = new EventSource('/events?code=' + encodeURIComponent($('code').value))
+  es.addEventListener('hello', function (e) {
+    offset = JSON.parse(e.data).serverTime - Date.now()
+    $('small').textContent = 'connected'
+  })
+  es.addEventListener('signal', function (e) {
+    var sig = JSON.parse(e.data)
+    offset = sig.serverTime - Date.now()
+    run(sig)
+  })
+  es.onerror = function () { $('small').textContent = 'connection problem' }
+}
 
-async function send(action) {
-  const r = await fetch('/signal', {
+function send(action) {
+  fetch('/signal', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-admin-key': $('key').value },
-    body: JSON.stringify({ action, delaySeconds: Number($('delay').value), note: $('note').value }),
-  });
-  const d = await r.json();
-  $('hostmsg').textContent = r.ok ? 'Sent to ' + d.listeners + ' listener(s)' : 'Error: ' + d.error;
+    body: JSON.stringify({ action: action, delaySeconds: Number($('delay').value), note: $('note').value, stockId: $('stock').value || null })
+  })
+    .then(function (r) { return r.json() })
+    .then(function (d) { $('msg').textContent = d.ok ? 'sent to ' + d.listeners : d.error })
 }
-$('buy').onclick = () => send('buy');
-$('sell').onclick = () => send('sell');
+
+$('buy').onclick = function () { send('buy') }
+$('sell').onclick = function () { send('sell') }
 </script>
 </body>
 </html>
