@@ -1,62 +1,79 @@
-const express = require('express');
-const crypto = require('crypto');
+const express = require('express')
+const crypto = require('crypto')
 
-const app = express();
-app.use(express.json());
-app.use(express.static('public'));
+const app = express()
+app.use(express.json())
+app.use(express.static('public'))
 
-const ADMIN_KEY = process.env.ADMIN_KEY;      // required: only the host can send signals
-const JOIN_CODE = process.env.JOIN_CODE || ''; // optional: makes the room invite-only
-const PORT = process.env.PORT || 3000;
+const KEY = process.env.ADMIN_KEY
+const CODE = process.env.JOIN_CODE || ''
+const port = process.env.PORT || 3000
 
-const clients = new Set();
-let lastSignal = null;
+let listeners = []
+let last = null
 
-const joinOk = (req) => !JOIN_CODE || req.query.code === JOIN_CODE;
+app.get('/time', (req, res) => res.json({ serverTime: Date.now() }))
 
-// Server clock, so clients can correct for their own clock offset
-app.get('/time', (req, res) => res.json({ serverTime: Date.now() }));
-
-// Live stream of signals (Server-Sent Events)
 app.get('/events', (req, res) => {
-  if (!joinOk(req)) return res.status(401).json({ error: 'Invalid join code' });
+  if (CODE && req.query.code !== CODE) return res.status(401).json({ error: 'wrong code' })
+
   res.set({
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
-  });
-  res.flushHeaders();
-  res.write(`event: hello\ndata: ${JSON.stringify({ serverTime: Date.now(), last: lastSignal, listeners: clients.size + 1 })}\n\n`);
-  clients.add(res);
-  req.on('close', () => clients.delete(res));
-});
+    Connection: 'keep-alive'
+  })
+  res.flushHeaders()
+  res.write('event: hello\ndata: ' + JSON.stringify({ serverTime: Date.now(), last, listeners: listeners.length + 1 }) + '\n\n')
 
-// Host sends a signal: { "action": "buy" | "sell", "delaySeconds": 10, "note": "optional" }
+  listeners.push(res)
+  req.on('close', () => {
+    listeners = listeners.filter(l => l !== res)
+  })
+})
+
 app.post('/signal', (req, res) => {
-  if (!ADMIN_KEY || req.get('x-admin-key') !== ADMIN_KEY) {
-    return res.status(401).json({ error: 'Unauthorized' });
+  if (!KEY || req.get('x-admin-key') !== KEY) return res.status(401).json({ error: 'nope' })
+
+  const { action, delaySeconds, note, stockId } = req.body || {}
+  if (action !== 'buy' && action !== 'sell') {
+    return res.status(400).json({ error: 'action must be buy or sell' })
   }
-  const { action, delaySeconds, note } = req.body || {};
-  if (!['buy', 'sell'].includes(action)) {
-    return res.status(400).json({ error: 'action must be "buy" or "sell"' });
-  }
-  const delay = Math.min(120, Math.max(3, Number(delaySeconds) || 10));
-  const now = Date.now();
-  lastSignal = {
+
+  let delay = Number(delaySeconds) || 10
+  delay = Math.max(3, Math.min(120, delay))
+
+  const now = Date.now()
+  last = {
     id: crypto.randomUUID(),
     action,
+    stockId: stockId == null ? null : String(stockId).slice(0, 64),
     note: String(note || '').slice(0, 140),
     createdAt: now,
-    fireAt: now + delay * 1000,
-  };
-  const payload = `event: signal\ndata: ${JSON.stringify({ ...lastSignal, serverTime: now })}\n\n`;
-  clients.forEach((c) => c.write(payload));
-  res.json({ ok: true, signal: lastSignal, listeners: clients.size });
-});
+    fireAt: now + delay * 1000
+  }
 
-app.get('/status', (req, res) => res.json({ listeners: clients.size, last: lastSignal }));
+  const msg = 'event: signal\ndata: ' + JSON.stringify({ ...last, serverTime: now }) + '\n\n'
+  listeners.forEach(l => l.write(msg))
 
-// Keep connections alive (Render closes idle streams)
-setInterval(() => clients.forEach((c) => c.write(': ping\n\n')), 20000);
+  res.json({ ok: true, signal: last, listeners: listeners.length })
+})
 
-app.listen(PORT, () => console.log(`Signal API running on port ${PORT}`));
+// plain endpoint, no stream. returns the last signal
+app.get('/latest', (req, res) => {
+  if (CODE && req.query.code !== CODE) return res.status(401).json({ error: 'wrong code' })
+  if (!last) return res.json({ signal: null, serverTime: Date.now() })
+  res.json({
+    id: last.id,
+    action: last.action,
+    stockId: last.stockId,
+    timestamp: last.fireAt,
+    serverTime: Date.now()
+  })
+})
+
+app.get('/status', (req, res) => res.json({ listeners: listeners.length, last }))
+
+// render kills idle connections so keep them busy
+setInterval(() => listeners.forEach(l => l.write(': ping\n\n')), 20000)
+
+app.listen(port, () => console.log('running on ' + port))
